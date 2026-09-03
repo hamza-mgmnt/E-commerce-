@@ -38,6 +38,8 @@ export interface Product {
   updated_at: string;
 }
 
+export type OrderStatus = 'Pending' | 'Completed' | 'Shipped';
+
 export interface DailyOrder {
   id: string;
   product_id: string | null;
@@ -53,6 +55,21 @@ export interface DailyOrder {
   notes: string;
   logged_by: string | null;
   created_at: string;
+  customer_name: string;
+  customer_order_id: string | null;
+  status: OrderStatus;
+}
+
+export interface CustomerOrderGroup {
+  customer_order_id: string;
+  customer_name: string;
+  order_date: string;
+  status: OrderStatus;
+  channel: string;
+  notes: string;
+  items: DailyOrder[];
+  grand_total: number;
+  total_units: number;
 }
 
 export type DateRangePreset = 'today' | 'yesterday' | 'this_week' | 'this_month' | 'custom';

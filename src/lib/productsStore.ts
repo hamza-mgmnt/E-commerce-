@@ -24,7 +24,10 @@ function writeLocal(products: Product[]) {
 }
 
 function notify() {
-  if (cache) listeners.forEach((fn) => fn(cache));
+  if (cache) {
+    const snapshot = cache;
+    listeners.forEach((fn) => fn(snapshot));
+  }
 }
 
 export function subscribeProducts(fn: (products: Product[]) => void): () => void {
