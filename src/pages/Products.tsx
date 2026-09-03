@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect, FormEvent, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { formatCurrency } from '@/lib/utils';
@@ -90,12 +90,18 @@ export default function Products() {
 
   async function fetchProducts() {
     setLoading(true);
-    const { data } = await supabase
-      .from('products')
-      .select('*, variants(*)')
-      .order('product_name');
-    setProducts((data as Product[]) || []);
-    setLoading(false);
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*, variants:product_variants(*)')
+        .order('product_name');
+      if (error) throw error;
+      setProducts((data as Product[]) || []);
+    } catch {
+      setProducts([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   const filtered = products.filter((p) => {
@@ -261,10 +267,23 @@ export default function Products() {
   }
 
   function getProductStock(p: Product): number {
-    if (p.has_variants && p.variants) {
-      return p.variants.reduce((sum, v) => sum + v.stock_quantity, 0);
+    if (p.has_variants && p.variants?.length) {
+      return p.variants.reduce((sum, v) => sum + (v.stock_quantity || 0), 0);
     }
-    return p.stock_quantity;
+    return p.stock_quantity || 0;
+  }
+
+  function getProductPriceDisplay(p: Product): string {
+    if (p.has_variants && p.variants?.length) {
+      const prices = p.variants.map((v) => Number(v.unit_price) || 0).filter((pr) => pr > 0);
+      if (prices.length > 0) {
+        const min = Math.min(...prices);
+        const max = Math.max(...prices);
+        return min === max ? formatCurrency(min) : `${formatCurrency(min)} – ${formatCurrency(max)}`;
+      }
+      return '—';
+    }
+    return p.unit_price ? formatCurrency(Number(p.unit_price)) : '—';
   }
 
   if (!isAdmin) {
@@ -372,24 +391,12 @@ export default function Products() {
                 {filtered.map((p) => {
                   const stock = getProductStock(p);
                   const isExpanded = expandedRows.has(p.id);
-                  const hasVariants = p.has_variants && p.variants && p.variants.length > 0;
-
-                  let priceDisplay = formatCurrency(Number(p.unit_price));
-                  if (hasVariants && p.variants) {
-                    const prices = p.variants.map((v) => Number(v.unit_price)).filter((pr) => pr > 0);
-                    if (prices.length > 0) {
-                      const min = Math.min(...prices);
-                      const max = Math.max(...prices);
-                      priceDisplay = min === max ? formatCurrency(min) : `${formatCurrency(min)} – ${formatCurrency(max)}`;
-                    } else {
-                      priceDisplay = '—';
-                    }
-                  }
+                  const hasVariants = !!(p.has_variants && p.variants?.length);
+                  const priceDisplay = getProductPriceDisplay(p);
 
                   return (
-                    <>
+                    <Fragment key={p.id}>
                       <tr
-                        key={p.id}
                         className={`border-b border-slate-100 dark:border-slate-800 last:border-0 hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors ${
                           hasVariants ? 'cursor-pointer' : ''
                         }`}
@@ -408,10 +415,17 @@ export default function Products() {
                         <td className="py-3 px-4 text-slate-500 dark:text-slate-400">{p.category}</td>
                         <td className="py-3 px-4">
                           {hasVariants ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-brand-50 dark:bg-brand-900/20 text-brand-600 dark:text-brand-400">
-                              <Layers size={12} />
-                              {p.variation_type} ({p.variants!.length})
-                            </span>
+                            <div className="flex flex-wrap items-center gap-1">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-brand-50 dark:bg-brand-900/20 text-brand-600 dark:text-brand-400">
+                                <Layers size={12} />
+                                {p.variation_type || 'Size'} ({p.variants!.length})
+                              </span>
+                              {p.variants!.map((v) => (
+                                <span key={v.id} className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400">
+                                  {v.variation_value}
+                                </span>
+                              ))}
+                            </div>
                           ) : (
                             <span className="text-slate-400 text-xs">{p.size || '—'}</span>
                           )}
@@ -457,7 +471,7 @@ export default function Products() {
                               <table className="w-full text-xs">
                                 <thead>
                                   <tr className="border-b border-slate-200 dark:border-slate-700">
-                                    <th className="text-left py-2 px-3 font-medium text-slate-500 uppercase">{p.variation_type}</th>
+                                    <th className="text-left py-2 px-3 font-medium text-slate-500 uppercase">{p.variation_type || 'Size'}</th>
                                     <th className="text-left py-2 px-3 font-medium text-slate-500 uppercase">SKU</th>
                                     <th className="text-right py-2 px-3 font-medium text-slate-500 uppercase">Unit Price</th>
                                     <th className="text-right py-2 px-3 font-medium text-slate-500 uppercase">Stock</th>
@@ -468,16 +482,16 @@ export default function Products() {
                                     <tr key={v.id} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
                                       <td className="py-2 px-3 font-medium text-slate-700 dark:text-slate-200">{v.variation_value}</td>
                                       <td className="py-2 px-3 text-slate-400">{v.sku || '—'}</td>
-                                      <td className="py-2 px-3 text-right text-slate-600 dark:text-slate-300">{formatCurrency(Number(v.unit_price))}</td>
+                                      <td className="py-2 px-3 text-right text-slate-600 dark:text-slate-300">{formatCurrency(Number(v.unit_price) || 0)}</td>
                                       <td className="py-2 px-3 text-right">
                                         <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
-                                          v.stock_quantity === 0
+                                          (v.stock_quantity || 0) === 0
                                             ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
-                                            : v.stock_quantity < 10
+                                            : (v.stock_quantity || 0) < 10
                                               ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
                                               : 'bg-accent-100 dark:bg-accent-900/30 text-accent-700 dark:text-accent-400'
                                         }`}>
-                                          {v.stock_quantity}
+                                          {v.stock_quantity || 0}
                                         </span>
                                       </td>
                                     </tr>
@@ -488,7 +502,7 @@ export default function Products() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>
