@@ -5,6 +5,7 @@ import { formatCurrency, formatDate, todayISO, exportToCSV, exportToPDF } from '
 import { CATEGORIES } from '@/types';
 import type { Product, DailyOrder, Category } from '@/types';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { subscribeProducts, fetchProducts as storeFetch } from '@/lib/productsStore';
 import {
   Save,
   Trash2,
@@ -65,7 +66,12 @@ export default function Orders() {
   const [orderDateFilter, setOrderDateFilter] = useState(todayISO());
 
   useEffect(() => {
-    fetchData();
+    const unsub = subscribeProducts((data) => {
+      setProducts(data);
+    });
+    storeFetch();
+    fetchOrders();
+    return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -73,19 +79,26 @@ export default function Orders() {
     setRows([createEmptyRow(entryDate)]);
   }, [entryDate]);
 
-  async function fetchData() {
+  async function fetchOrders() {
     setLoading(true);
-    const [{ data: productData }, { data: orderData }] = await Promise.all([
-      supabase.from('products').select('*, variants(*)').order('product_name'),
-      supabase.from('daily_orders').select('*').order('created_at', { ascending: false }),
-    ]);
-    setProducts((productData as Product[]) || []);
-    setOrders((orderData as DailyOrder[]) || []);
-    setLoading(false);
+    try {
+      const { data, error } = await supabase
+        .from('daily_orders')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setOrders((data as DailyOrder[]) || []);
+    } catch {
+      setOrders([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   const categoryProducts = useMemo(
-    () => products.filter((p) => p.category === activeCategory),
+    () => products.filter(
+      (p) => p.category?.trim().toLowerCase() === activeCategory.trim().toLowerCase()
+    ),
     [products, activeCategory]
   );
 
@@ -109,10 +122,10 @@ export default function Orders() {
   );
 
   function getProductStock(p: Product): number {
-    if (p.has_variants && p.variants) {
-      return p.variants.reduce((sum, v) => sum + v.stock_quantity, 0);
+    if (p.has_variants && p.variants?.length) {
+      return p.variants.reduce((sum, v) => sum + (v.stock_quantity || 0), 0);
     }
-    return p.stock_quantity;
+    return p.stock_quantity || 0;
   }
 
   function updateRow(id: string, field: keyof OrderRow, value: string | number) {
@@ -221,14 +234,20 @@ export default function Orders() {
     setSaveMsg({ type: 'success', text: `${validRows.length} order(s) saved successfully! Stock updated.` });
     setRows([createEmptyRow(entryDate)]);
     setSaving(false);
-    fetchData();
+    fetchOrders();
+    storeFetch();
   }
 
   async function handleDeleteOrder() {
     if (!deleteTarget) return;
-    await supabase.from('daily_orders').delete().eq('id', deleteTarget.id);
+    try {
+      await supabase.from('daily_orders').delete().eq('id', deleteTarget.id);
+    } catch {
+      // ignore — refresh anyway
+    }
     setDeleteTarget(null);
-    fetchData();
+    fetchOrders();
+    storeFetch();
   }
 
   function handleExportCSV() {
@@ -262,7 +281,7 @@ export default function Orders() {
     exportToPDF(`Order Log — ${formatDate(orderDateFilter)}`, headers, rowsData);
   }
 
-  if (loading) {
+  if (loading && orders.length === 0 && products.length === 0) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="text-slate-400 flex items-center gap-3">
@@ -336,7 +355,7 @@ export default function Orders() {
                 <tbody>
                   {rows.map((row, idx) => {
                     const selectedProduct = categoryProducts.find((p) => p.id === row.product_id);
-                    const hasVariants = selectedProduct?.has_variants && selectedProduct?.variants && selectedProduct.variants.length > 0;
+                    const hasVariants = !!(selectedProduct?.has_variants && selectedProduct?.variants?.length);
 
                     return (
                       <tr key={row.id} className="border-b border-slate-100 dark:border-slate-800 last:border-0">

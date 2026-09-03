@@ -6,6 +6,7 @@ import { CATEGORIES } from '@/types';
 import type { Product, ProductVariant, Category } from '@/types';
 import { Modal } from '@/components/ConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { subscribeProducts, fetchProducts as storeFetch, invalidateProducts } from '@/lib/productsStore';
 import {
   Pencil,
   Trash2,
@@ -79,7 +80,12 @@ export default function Products() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetchProducts();
+    const unsub = subscribeProducts((data) => {
+      setProducts(data);
+      setLoading(false);
+    });
+    storeFetch();
+    return unsub;
   }, []);
 
   useEffect(() => {
@@ -87,22 +93,6 @@ export default function Products() {
     const timer = setTimeout(() => setToast(null), 3500);
     return () => clearTimeout(timer);
   }, [toast]);
-
-  async function fetchProducts() {
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('products')
-        .select('*, variants:product_variants(*)')
-        .order('product_name');
-      if (error) throw error;
-      setProducts((data as Product[]) || []);
-    } catch {
-      setProducts([]);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   const filtered = products.filter((p) => {
     const matchesSearch =
@@ -235,7 +225,7 @@ export default function Products() {
       setForm({ ...EMPTY_FORM, variants: [newVariant()] });
       setModalOpen(false);
       setToast({ type: 'success', message: editing ? 'Product updated successfully.' : 'Product added successfully.' });
-      fetchProducts();
+      invalidateProducts();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'An unexpected error occurred while saving.';
       setFormError(message);
@@ -254,7 +244,7 @@ export default function Products() {
       setToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to delete product.' });
     }
     setDeleteTarget(null);
-    fetchProducts();
+    invalidateProducts();
   }
 
   function toggleRow(id: string) {
