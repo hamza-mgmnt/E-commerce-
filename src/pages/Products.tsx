@@ -18,6 +18,7 @@ import {
   Layers,
   ChevronDown,
   ChevronUp,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface VariantForm {
@@ -73,12 +74,19 @@ export default function Products() {
   const [form, setForm] = useState<ProductForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchProducts();
   }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   async function fetchProducts() {
     setLoading(true);
@@ -167,71 +175,78 @@ export default function Products() {
       return;
     }
 
-    const validVariants = form.variants.filter((v) => v.variation_value.trim());
+    const validVariants = form.variants.filter(
+      (v) =>
+        v.variation_value.trim() &&
+        v.unit_price.trim() &&
+        v.stock_quantity.trim()
+    );
     if (validVariants.length === 0) {
-      setFormError('Add at least one size variant with a name');
+      setFormError('Add at least one variation with a size name, unit price, and stock quantity.');
       return;
     }
 
     setSaving(true);
 
-    const productPayload = {
-      category: form.category,
-      product_name: form.product_name.trim(),
-      has_variants: true,
-      variation_type: form.variation_type.trim() || 'Bedding Size',
-      size: '',
-      unit_price: 0,
-      stock_quantity: 0,
-      sku: '',
-    };
+    try {
+      const productPayload = {
+        category: form.category,
+        product_name: form.product_name.trim(),
+        has_variants: true,
+        variation_type: form.variation_type.trim() || 'Bedding Size',
+        size: '',
+        unit_price: 0,
+        stock_quantity: 0,
+        sku: '',
+      };
 
-    let productId = editing?.id;
+      let productId = editing?.id;
 
-    if (editing) {
-      const { error } = await supabase.from('products').update(productPayload).eq('id', editing.id);
-      if (error) {
-        setFormError(error.message);
-        setSaving(false);
-        return;
+      if (editing) {
+        const { error } = await supabase.from('products').update(productPayload).eq('id', editing.id);
+        if (error) throw error;
+        await supabase.from('product_variants').delete().eq('product_id', editing.id);
+      } else {
+        const { data, error } = await supabase.from('products').insert(productPayload).select('id');
+        if (error) throw error;
+        if (!data || data.length === 0) throw new Error('Failed to create product');
+        productId = data[0].id;
       }
-      await supabase.from('product_variants').delete().eq('product_id', editing.id);
-    } else {
-      const { data, error } = await supabase.from('products').insert(productPayload).select('id');
-      if (error || !data || data.length === 0) {
-        setFormError(error?.message || 'Failed to create product');
-        setSaving(false);
-        return;
+
+      if (productId) {
+        const variantPayloads = validVariants.map((v) => ({
+          product_id: productId,
+          variation_value: v.variation_value.trim(),
+          sku: v.sku.trim(),
+          unit_price: parseFloat(v.unit_price) || 0,
+          stock_quantity: parseInt(v.stock_quantity) || 0,
+        }));
+
+        const { error: vError } = await supabase.from('product_variants').insert(variantPayloads);
+        if (vError) throw vError;
       }
-      productId = data[0].id;
+
+      setForm({ ...EMPTY_FORM, variants: [newVariant()] });
+      setModalOpen(false);
+      setToast({ type: 'success', message: editing ? 'Product updated successfully.' : 'Product added successfully.' });
+      fetchProducts();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'An unexpected error occurred while saving.';
+      setFormError(message);
+    } finally {
+      setSaving(false);
     }
-
-    if (productId) {
-      const variantPayloads = validVariants.map((v) => ({
-        product_id: productId,
-        variation_value: v.variation_value.trim(),
-        sku: v.sku.trim(),
-        unit_price: parseFloat(v.unit_price) || 0,
-        stock_quantity: parseInt(v.stock_quantity) || 0,
-      }));
-
-      const { error: vError } = await supabase.from('product_variants').insert(variantPayloads);
-      if (vError) {
-        setFormError(vError.message);
-        setSaving(false);
-        return;
-      }
-    }
-
-    setSaving(false);
-    setModalOpen(false);
-    fetchProducts();
   }
 
   async function handleDelete() {
     if (!deleteTarget) return;
-    await supabase.from('product_variants').delete().eq('product_id', deleteTarget.id);
-    await supabase.from('products').delete().eq('id', deleteTarget.id);
+    try {
+      await supabase.from('product_variants').delete().eq('product_id', deleteTarget.id);
+      await supabase.from('products').delete().eq('id', deleteTarget.id);
+      setToast({ type: 'success', message: 'Product deleted successfully.' });
+    } catch (err) {
+      setToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to delete product.' });
+    }
     setDeleteTarget(null);
     fetchProducts();
   }
@@ -265,6 +280,30 @@ export default function Products() {
 
   return (
     <div className="space-y-5">
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed top-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-xl shadow-lg border animate-scale-in ${
+            toast.type === 'success'
+              ? 'bg-white dark:bg-slate-800 border-emerald-200 dark:border-emerald-700'
+              : 'bg-white dark:bg-slate-800 border-red-200 dark:border-red-700'
+          }`}
+        >
+          {toast.type === 'success' ? (
+            <CheckCircle2 size={20} className="text-emerald-500" />
+          ) : (
+            <AlertCircle size={20} className="text-red-500" />
+          )}
+          <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{toast.message}</span>
+          <button
+            onClick={() => setToast(null)}
+            className="ml-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="glass-card p-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
